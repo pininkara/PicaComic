@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:dio/dio.dart';
@@ -6,6 +7,7 @@ import 'package:pica_comic/foundation/app.dart';
 import 'package:pica_comic/network/cookie_jar.dart';
 import 'package:pica_comic/pages/webview.dart';
 import 'package:pica_comic/tools/translations.dart';
+import 'cloudflare_session.dart';
 
 import '../components/components.dart';
 
@@ -66,7 +68,7 @@ class CloudflareInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) async {
-    if (err.response?.statusCode == 403) {
+    if (err.response != null) {
       handler.next(_check(err.response!) ?? err);
     } else {
       handler.next(err);
@@ -75,12 +77,10 @@ class CloudflareInterceptor extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    if (response.statusCode == 403) {
-      var err = _check(response);
-      if (err != null) {
-        handler.reject(err);
-        return;
-      }
+    var err = _check(response);
+    if (err != null) {
+      handler.reject(err);
+      return;
     }
     handler.next(response);
   }
@@ -93,86 +93,108 @@ class CloudflareInterceptor extends Interceptor {
   }
 }
 
-void passCloudflare(CloudflareException e, void Function() onFinished) async {
-  var url = e.url;
-  var uri = Uri.parse(url);
+bool _verificationOpen = false;
 
-  void saveCookies(Map<String, String> cookies) {
-    var domain = uri.host;
-    var splits = domain.split('.');
-    if (splits.length > 1) {
-      domain = ".${splits[splits.length - 2]}.${splits[splits.length - 1]}";
-    }
-    SingleInstanceCookieJar.instance!.saveFromResponse(
-      uri,
-      List<io.Cookie>.generate(cookies.length, (index) {
-        var cookie = io.Cookie(
-            cookies.keys.elementAt(index), cookies.values.elementAt(index));
-        cookie.domain = domain;
-        return cookie;
-      }),
-    );
+Future<void> passCloudflare(
+    CloudflareException e, void Function() onFinished) async {
+  if (_verificationOpen) return;
+  _verificationOpen = true;
+  final uri = Uri.parse(e.url);
+  final url = uri.path.startsWith('/api/')
+      ? uri.replace(path: '/', query: '').toString()
+      : e.url;
+  final session = CloudflareSession();
+
+  void saveSession(Map<String, String> cookies, String ua) {
+    appdata.implicitData[3] = ua;
+    appdata.writeImplicitData();
+    // Replace rejected clearance at every matching domain/path. Otherwise a
+    // stale host-only cookie can shadow the freshly imported domain cookie.
+    final jar = SingleInstanceCookieJar.instance!;
+    jar.deleteMatching(uri, 'cf_clearance');
+    jar.saveFromResponse(uri, cookies.entries.map((entry) =>
+        io.Cookie(entry.key, entry.value)
+          ..domain = uri.host
+          ..path = '/'
+          ..secure = uri.scheme == 'https').toList());
+    browserSessionHosts.add(uri.host);
   }
 
-  if (App.isDesktop && (await DesktopWebview.isAvailable())) {
-    var webview = DesktopWebview(
-      initialUrl: url,
-      onTitleChange: (title, controller) async {
-        var res = await controller.evaluateJavascript(
-            "document.head.innerHTML.includes('#challenge-success-text')");
-        if (res == 'false') {
-          var ua = controller.userAgent;
-          if (ua != null) {
-            appdata.implicitData[3] = ua;
-            appdata.writeImplicitData();
+  try {
+    if (App.isDesktop && (await DesktopWebview.isAvailable())) {
+      final closed = Completer<void>();
+      final webview = DesktopWebview(
+        initialUrl: url,
+        onTitleChange: (title, controller) async {
+          try {
+            final success = await session.check(() async {
+              final ready = await controller.evaluateJavascript(
+                  cloudflarePageReadyScript);
+              if (ready != 'true') return false;
+              final cookies = await controller.getCookies(url);
+              final ua = controller.userAgent;
+              if (cookies['cf_clearance']?.isNotEmpty != true ||
+                  ua == null || ua.isEmpty) return false;
+              saveSession(cookies, ua);
+              return true;
+            });
+            if (success) {
+              controller.close();
+              onFinished();
+            }
+          } catch (_) {
+            // Keep verification open if the document navigated during a check.
           }
-          var cookiesMap = await controller.getCookies(url);
-          if(cookiesMap['cf_clearance'] == null) {
-            return;
-          }
-          saveCookies(cookiesMap);
-          controller.close();
-          onFinished();
-        }
-      },
-    );
-    webview.open();
-  } else if (App.isMobile) {
-    await App.globalTo(
-      () => AppWebview(
+        },
+        onClose: () {
+          session.cancel();
+          if (!closed.isCompleted) closed.complete();
+        },
+      );
+      webview.open();
+      await closed.future;
+    } else if (App.isMobile) {
+      bool verified = false;
+      await App.globalTo(() => AppWebview(
         initialUrl: url,
         singlePage: true,
-        onTitleChange: (title, controller) async {
-          var res = await controller.platform.evaluateJavascript(
-              source:
-                  "document.head.innerHTML.includes('#challenge-success-text')");
-          if (res == false) {
-            var ua = await controller.getUA();
-            if (ua != null) {
-              appdata.implicitData[3] = ua;
-              appdata.writeImplicitData();
+        onLoadStop: (controller) async {
+          try {
+            final success = await session.check(() async {
+              final currentUrl = await controller.getUrl();
+              if (currentUrl == null ||
+                  Uri.parse(currentUrl.toString()).host != uri.host) return false;
+              final ready = await controller.evaluateJavascript(
+                  source: cloudflarePageReadyScript);
+              if (ready != true) return false;
+              if (uri.host == 'nhentai.net' || uri.host == 'nhentai.xxx') {
+                final content = await controller.evaluateJavascript(source:
+                    "!!document.querySelector('#content, #info, .index-container')");
+                if (content != true) return false;
+              }
+              final cookies = await controller.getCookies(url) ?? {};
+              final ua = await controller.getUA();
+              if (cookies['cf_clearance']?.isNotEmpty != true ||
+                  ua == null || ua.isEmpty) return false;
+              saveSession(cookies, ua);
+              return true;
+            });
+            if (success) {
+              verified = true;
+              App.globalBack();
             }
-            var cookiesMap = await controller.getCookies(url) ?? {};
-            if(cookiesMap['cf_clearance'] == null) {
-              return;
-            }
-            saveCookies(cookiesMap);
-            App.globalBack();
+          } catch (_) {
+            // A navigation can invalidate JS evaluation. Check the next load.
           }
         },
-        onStarted: (controller) async {
-          var ua = await controller.getUA();
-          if (ua != null) {
-            appdata.implicitData[3] = ua;
-            appdata.writeImplicitData();
-          }
-          var cookiesMap = await controller.getCookies(url) ?? {};
-          saveCookies(cookiesMap);
-        },
-      ),
-    );
-    onFinished();
-  } else {
-    showToast(message: "当前设备不支持".tl);
+      ));
+      session.cancel();
+      // Back/cancel must not retry a rejected request.
+      if (verified) onFinished();
+    } else {
+      showToast(message: "当前设备不支持".tl);
+    }
+  } finally {
+    _verificationOpen = false;
   }
 }
