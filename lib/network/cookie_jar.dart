@@ -163,6 +163,14 @@ class CookieJarSql {
     }
   }
 
+  /// Remove all paths of a rejected cookie, without deleting login cookies.
+  void deleteMatching(Uri uri, String name) {
+    for (final domain in _getAcceptedDomains(uri.host)) {
+      _db.execute('DELETE FROM cookies WHERE name = ? AND domain = ?;',
+          [name, domain]);
+    }
+  }
+
   void deleteUri(Uri uri) {
     var acceptedDomains = _getAcceptedDomains(uri.host);
     for (var domain in acceptedDomains) {

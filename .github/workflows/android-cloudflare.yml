@@ -1,0 +1,65 @@
+name: Android Cloudflare fix
+
+on:
+  push:
+    branches: [fix/nhentai-cloudflare, master]
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'android/**'
+      - 'pubspec.*'
+      - '.github/workflows/android-cloudflare.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ORG_GRADLE_PROJECT_cfFixBuild: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.6'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Check changed Dart files
+        run: >-
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          lib/network/cloudflare.dart lib/network/cloudflare_session.dart
+          lib/network/cookie_jar.dart lib/pages/webview.dart
+          lib/network/nhentai_network/browser_transport.dart
+          lib/network/nhentai_network/rate_limit.dart
+          lib/network/nhentai_network/nhentai_main_network.dart
+          test/cloudflare_session_test.dart test/nhentai_rate_limit_test.dart
+          test/cloudflare_cookie_test.dart
+          test/cloudflare_interceptor_test.dart
+      - run: flutter test
+      - name: Build installable release APKs
+        run: flutter build apk --release
+      - name: Verify signatures and record checksums
+        shell: bash
+        run: |
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          find build/app/outputs/apk/release -name '*.apk' -print0 | while IFS= read -r -d '' apk; do
+            "$apksigner" verify "$apk"
+          done
+          cd build/app/outputs/apk/release
+          sha256sum *.apk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PicaComic-nhentai-cloudflare-apks
+          path: |
+            build/app/outputs/apk/release/*.apk
+            build/app/outputs/apk/release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

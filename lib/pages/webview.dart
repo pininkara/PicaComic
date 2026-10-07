@@ -17,12 +17,6 @@ export 'package:flutter_inappwebview/flutter_inappwebview.dart' show WebUri, URL
 
 extension WebviewExtension on InAppWebViewController{
   Future<Map<String, String>?> getCookies(String url) async{
-    if(url.contains("https://")){
-      url.replaceAll("https://", "");
-    }
-    if(url[url.length-1] == '/'){
-      url = url.substring(0, url.length-1);
-    }
     CookieManager cookieManager = CookieManager.instance();
     final cookies = await cookieManager.getCookies(url: WebUri(url));
     Map<String, String> res = {};
@@ -34,7 +28,7 @@ extension WebviewExtension on InAppWebViewController{
 
   Future<String?> getUA() async{
     var res = await evaluateJavascript(source: "navigator.userAgent");
-    if(res is String){
+    if(res is String && res.isNotEmpty){
       if(res[0] == "'" || res[0] == "\"") {
         res = res.substring(1, res.length-1);
       }
@@ -45,7 +39,8 @@ extension WebviewExtension on InAppWebViewController{
 
 class AppWebview extends StatefulWidget {
   const AppWebview({required this.initialUrl, this.onTitleChange,
-    this.onNavigation, this.singlePage = false, this.onStarted, super.key});
+    this.onNavigation, this.singlePage = false, this.onStarted,
+    this.onLoadStop, super.key});
 
   final String initialUrl;
 
@@ -54,6 +49,8 @@ class AppWebview extends StatefulWidget {
   final bool Function(String url)? onNavigation;
 
   final void Function(InAppWebViewController controller)? onStarted;
+
+  final Future<void> Function(InAppWebViewController controller)? onLoadStop;
 
   final bool singlePage;
 
@@ -123,6 +120,9 @@ class _AppWebviewState extends State<AppWebview> {
       onWebViewCreated: (c){
         controller = c;
         widget.onStarted?.call(c);
+      },
+      onLoadStop: (c, url) async {
+        await widget.onLoadStop?.call(c);
       },
       onProgressChanged: (c, p){
         if(mounted){

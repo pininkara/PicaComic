@@ -13,6 +13,9 @@ import 'package:pica_comic/tools/time.dart';
 import 'package:pica_comic/tools/translations.dart';
 import 'package:pica_comic/pages/pre_search_page.dart';
 import '../app_dio.dart';
+import '../cloudflare_session.dart';
+import 'browser_transport.dart';
+import 'rate_limit.dart';
 import 'models.dart';
 import 'package:html/parser.dart';
 
@@ -32,6 +35,16 @@ class NhentaiNetwork {
   String baseUrl = "https://nhentai.net";
 
   late Dio dio;
+
+  final _rateLimit = NhentaiRateLimit();
+
+  Res<String> _requestError(Object error) {
+    if (error is DioException && error.response?.statusCode == 429) {
+      _rateLimit.record(error.response?.headers.value('retry-after'), DateTime.now());
+      return Res(null, errorMessage: _rateLimit.message(DateTime.now()));
+    }
+    return Res(null, errorMessage: error.toString());
+  }
 
   Future<void> init() async {
     cookieJar = SingleInstanceCookieJar.instance;
@@ -56,28 +69,47 @@ class NhentaiNetwork {
   void logout() async {
     logged = false;
     cookieJar!.delete(Uri.parse(baseUrl), "sessionid");
+    if (App.isMobile) await clearNhentaiBrowserLogin('$baseUrl/');
   }
 
   Future<Res<String>> get(String url) async {
+    if (_rateLimit.remaining(DateTime.now()) > Duration.zero) {
+      return Res(null, errorMessage: _rateLimit.message(DateTime.now()));
+    }
     if (cookieJar == null) {
       await init();
     }
     try {
+      if (App.isMobile && browserSessionHosts.contains(Uri.parse(url).host)) {
+        return Res(await readNhentaiInBrowser(url));
+      }
       var res = await dio.get<String>(url, options: Options(followRedirects: false));
       if (res.statusCode == 302) {
         var path = res.headers["Location"]?.first ??
             res.headers["location"]?.first ??
             "";
-        return get(Uri.parse(url).replace(path: path).toString());
+        return get(Uri.parse(url).resolve(path).toString());
       }
       return Res(res.data);
     } catch (e) {
-      return Res(null, errorMessage: e.toString());
+      if (e is CloudflareException && App.isMobile &&
+          !browserSessionHosts.contains(Uri.parse(url).host)) {
+        // An existing verified WebView session may still work when Dio fails.
+        try {
+          return Res(await readNhentaiInBrowser(url));
+        } catch (browserError) {
+          return _requestError(browserError);
+        }
+      }
+      return _requestError(e);
     }
   }
 
   Future<Res<String>> post(String url, dynamic data,
       [Map<String, String>? headers]) async {
+    if (_rateLimit.remaining(DateTime.now()) > Duration.zero) {
+      return Res(null, errorMessage: _rateLimit.message(DateTime.now()));
+    }
     if (cookieJar == null) {
       await init();
     }
@@ -85,7 +117,7 @@ class NhentaiNetwork {
       var res = await dio.post<String>(url, data: data, options: Options(headers: headers));
       return Res(res.data);
     } catch (e) {
-      return Res(null, errorMessage: e.toString());
+      return _requestError(e);
     }
   }
 
