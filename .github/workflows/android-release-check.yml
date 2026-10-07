@@ -1,0 +1,41 @@
+name: Check Android release workflow
+
+on:
+  push:
+    branches: [ci/android-tag-releases, master]
+    paths:
+      - '.github/workflows/android-release*.yml'
+      - '.github/scripts/android_release*.py'
+  pull_request:
+    paths:
+      - '.github/workflows/android-release*.yml'
+      - '.github/scripts/android_release*.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Test metadata and signing configuration
+        run: python3 -m unittest discover -s .github/scripts -p '*_test.py' -v
+      - name: Check workflow syntax with actionlint
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" .github/workflows/android-release.yml .github/workflows/android-release-check.yml
