@@ -36,10 +36,23 @@ APK 以及 SHA256SUMS。构建结果将在 Actions 的 Artifacts 中提供，保
 
 修复测试包使用 `com.github.pacalini.pica_comic.cf_fix`，采用 Android 调试密钥签名的
 release 构建，可与原版并存，不能覆盖原版；需要数据时请先从原版导出，再导入测试包。
-没有原项目签名密钥时，不能声称这是可覆盖原版的官方更新。
 
 回归测试覆盖重复完成、取消、加载失败、旧 Cookie 覆盖和 429 冷却。
-当前代码已提交修复分支，正在等待 Actions 测试及 APK 构建结果。
+验证结果：2026-10-07 的 [Actions 构建 #1](https://github.com/pininkara/PicaComic/actions/runs/37573017860)
+成功完成。13 项回归测试全部通过；改动文件的静态分析没有错误（3 条非致命提示）；
+release APK 编译、签名检查和上传均成功，下载后也核对了全部 APK 的 SHA-256。
+构建对应源码提交 `89f704bc328a61855bde9738d82e8ffd842a855c`。
+
+[下载 APK 压缩包](https://github.com/pininkara/PicaComic/actions/runs/37573017860/artifacts/11460874286)
+（GitHub Actions 产物，有效期至 2026-11-06）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `PicaComic-4.2.11-cf-fix.apk` | 通用 APK |
+| `PicaComic-4.2.11-cf-fix-arm64-v8a.apk` | ARM64 APK |
+| `PicaComic-4.2.11-cf-fix-x86_64.apk` | x86_64 APK |
+| `SHA256SUMS.txt` | 每个 APK 的校验值 |
+
 真实设备的 Cloudflare 验证、画廊打开、评论和登录
 仍需实机确认；测试不访问线上 nhentai，不保证绕过站点未来的挑战策略。
 如果已有 429，请等待界面提示的冷却时间后再验证。
