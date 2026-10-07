@@ -84,7 +84,7 @@ jobs:
             cp "$apk" release-assets/
           done
           cd release-assets
-          sha256sum *.apk > SHA256SUMS.txt
+          sha256sum -- *.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: android-release-apks
@@ -127,7 +127,7 @@ jobs:
               exit 0
             fi
           else
-            printf 'Android APKs built from `%s` (commit `%s`).\n\nIncludes universal, arm64-v8a and x86_64 APKs plus SHA256SUMS.txt.\n\nPackage: com.github.pacalini.pica_comic.cf_fix. See README for installation and signing details.\n' \
+            printf 'Android APKs built from %s (commit %s).\n\nIncludes universal, arm64-v8a and x86_64 APKs plus SHA256SUMS.txt.\n\nPackage: com.github.pacalini.pica_comic.cf_fix. See README for installation and signing details.\n' \
               "$RELEASE_TAG" "$RELEASE_COMMIT" > release-notes.md
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "PicaComic $RELEASE_TAG" --notes-file release-notes.md
